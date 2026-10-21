@@ -48419,7 +48419,7 @@ var opentype = /* @__PURE__ */ Object.freeze({
 var opentype_module_default = opentype;
 
 // src.js
-import { init, readDocument, readDxfDocument } from "./vendor/jww.js";
+import { init, readDocument, readJwcDocument, readDxfDocument } from "./vendor/jww.js";
 var $2 = (s3) => document.getElementById(s3);
 var MM = 72 / 25.4;
 var font;
@@ -48467,13 +48467,18 @@ function dashes(s3) {
   return [];
 }
 function parseJww(bytes) {
-  const raw = readDocument(bytes), d2 = readDxfDocument(bytes, true, 32, "paper_millimeters", 1);
+  const isJwc = state.kind === "JWC";
+  const raw = isJwc ? readJwcDocument(bytes) : readDocument(bytes), d2 = readDxfDocument(bytes, true, 32, "paper_millimeters", 1);
   if (raw.diagnostics?.length) warn(`JWW\u8AAD\u53D6\u8A3A\u65AD\uFF1A${JSON.stringify(raw.diagnostics).slice(0, 350)}`);
   if (d2.unsupported_entities?.length) warn("JWW\u306B\u672A\u5BFE\u5FDC\u306E\u8981\u7D20\u304C\u3042\u308A\u307E\u3059\uFF1A" + JSON.stringify(d2.unsupported_entities).slice(0, 250));
   if (raw.images?.length) warn("\u57CB\u3081\u8FBC\u307F\u753B\u50CF\u306F\u51FA\u529B\u3055\u308C\u307E\u305B\u3093\u3002\u753B\u50CF\u3092\u542B\u3080\u56F3\u9762\u306F\u5143\u306ECAD\u3068\u6BD4\u8F03\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
   if (raw.validation?.has_unresolved) warn("\u89E3\u6C7A\u3067\u304D\u306A\u3044\u30D6\u30ED\u30C3\u30AF\u53C2\u7167\u304C\u3042\u308A\u307E\u3059\u3002");
   state.storedScale = raw.header.layer_groups[raw.header.write_layer_group]?.scale || 1;
   $2("scale").value = state.storedScale;
+  if (isJwc) {
+    warn("JWC\u306F\u5BFE\u5FDC\u3059\u308B\u65E7\u5F62\u5F0F\u306E\u307F\u8AAD\u307F\u8FBC\u3081\u307E\u3059\u3002\u7DDA\u7A2E\u30FB\u8272\u30FB\u6587\u5B57\u306E\u914D\u7F6E\u306F\u6A19\u6E96\u8A2D\u5B9A\u3067\u5909\u63DB\u3059\u308B\u305F\u3081\u539F\u56F3\u3068\u6BD4\u8F03\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    if (sizes[raw.header.paper]) $2("paper").value = raw.header.paper;
+  }
   const usedGroups = new Set(raw.entities.map((e2) => e2.base?.layer_group).filter((x2) => x2 !== void 0));
   const scales = new Set([...usedGroups].map((i3) => raw.header.layer_groups[i3]?.scale));
   if (scales.size > 1) warn("\u7570\u306A\u308B\u7E2E\u5C3A\u306E\u30EC\u30A4\u30E4\u30FC\u30B0\u30EB\u30FC\u30D7\u304C\u6DF7\u5728\u3057\u3066\u3044\u307E\u3059\u3002\u51FA\u529B\u7E2E\u5C3A\u306F\u66F8\u8FBC\u30B0\u30EB\u30FC\u30D7\u3092\u57FA\u6E96\u3068\u3057\u307E\u3059\u3002\u5404\u30B0\u30EB\u30FC\u30D7\u306E\u5BF8\u6CD5\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
@@ -48492,7 +48497,9 @@ function parseJww(bytes) {
     } else warn("JWW\u672A\u5BFE\u5FDC\u8981\u7D20\uFF1A" + e2.type);
   }
   const hidden = /* @__PURE__ */ new Set();
-  for (const g2 of raw.header.layer_groups) for (const l3 of g2.layers) if (g2.state === 0 || l3.state === 0) hidden.add(l3.name);
+  if (isJwc) {
+    for (const l3 of d2.layers || []) if (l3.frozen) hidden.add(l3.name);
+  } else for (const g2 of raw.header.layer_groups) for (const l3 of g2.layers) if (g2.state === 0 || l3.state === 0) hidden.add(l3.name);
   state.hidden = hidden;
   return { entities, sourceCount: raw.entities.length, units: 1 };
 }
@@ -48511,11 +48518,48 @@ function polyPoints(v3, closed) {
   }
   return out;
 }
+function rawDxfTypes(text2) {
+  const lines = text2.split(/\r?\n/), types = /* @__PURE__ */ new Set();
+  let section = "";
+  for (let i3 = 0; i3 + 1 < lines.length; i3 += 2) {
+    const code = lines[i3].trim(), value = lines[i3 + 1].trim();
+    if (code === "0" && value === "SECTION" && lines[i3 + 2]?.trim() === "2") section = lines[i3 + 3]?.trim() || "";
+    else if (code === "0" && value === "ENDSEC") section = "";
+    else if (code === "0" && ["ENTITIES", "BLOCKS"].includes(section)) types.add(value);
+  }
+  return types;
+}
+function splinePoints(e2) {
+  const P2 = e2.controlPoints, U2 = e2.knotValues, p3 = e2.degreeOfSplineCurve;
+  if (!P2?.length || p3 < 1 || p3 > 10 || U2?.length !== P2.length + p3 + 1) throw Error("invalid spline");
+  for (let i3 = 1; i3 < U2.length; i3++) if (U2[i3] < U2[i3 - 1]) throw Error("invalid knots");
+  const start = U2[p3], end = U2[P2.length];
+  if (!(end > start)) throw Error("invalid range");
+  const out = [], N3 = Math.min(4096, Math.max(128, P2.length * 32));
+  for (let n2 = 0; n2 <= N3; n2++) {
+    const t3 = start + (end - start) * n2 / N3;
+    let k2 = p3;
+    if (n2 === N3) k2 = P2.length - 1;
+    else while (k2 < P2.length - 1 && t3 >= U2[k2 + 1]) k2++;
+    let d2 = [];
+    for (let j2 = 0; j2 <= p3; j2++) d2.push({ ...P2[k2 - p3 + j2] });
+    for (let q2 = 1; q2 <= p3; q2++) for (let j2 = p3; j2 >= q2; j2--) {
+      const i3 = k2 - p3 + j2, den = U2[i3 + p3 - q2 + 1] - U2[i3], a3 = den ? (t3 - U2[i3]) / den : 0;
+      d2[j2] = pt2((1 - a3) * d2[j2 - 1].x + a3 * d2[j2].x, (1 - a3) * d2[j2 - 1].y + a3 * d2[j2].y);
+    }
+    out.push(d2[p3]);
+  }
+  return out;
+}
 function parseDxf(bytes) {
   if (new TextDecoder().decode(bytes.slice(0, 22)).includes("AutoCAD Binary")) throw Error("\u30D0\u30A4\u30CA\u30EADXF\u306B\u306F\u672A\u5BFE\u5FDC\u3067\u3059\u3002CAD\u5074\u3067ASCII DXF\u3068\u3057\u3066\u4FDD\u5B58\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
   let text2 = new TextDecoder("utf-8").decode(bytes);
   if (text2.includes("\uFFFD")) text2 = new TextDecoder("shift-jis").decode(bytes);
+  const rawTypes = rawDxfTypes(text2);
   const d2 = new dist_default().parseSync(text2);
+  const parsedTypes = new Set([...d2.entities, ...Object.values(d2.blocks || {}).flatMap((b2) => b2.entities || [])].map((e2) => e2.type));
+  for (const type of rawTypes) if (!parsedTypes.has(type) && !["VERTEX", "SEQEND", "ENDBLK", "BLOCK", "ATTRIB", "ATTDEF"].includes(type)) warn("\u8AAD\u8FBC\u6BB5\u968E\u3067\u672A\u5BFE\u5FDC\uFF1A" + type + "\u3002\u8A72\u5F53\u8981\u7D20\u306F\u51FA\u529B\u3055\u308C\u307E\u305B\u3093\u3002");
+  if (rawTypes.has("ATTRIB") || rawTypes.has("ATTDEF")) warn("\u30D6\u30ED\u30C3\u30AF\u5C5E\u6027\u6587\u5B57\u306F\u672A\u5BFE\u5FDC\u90E8\u5206\u304C\u3042\u308A\u307E\u3059\u3002\u6587\u5B57\u306E\u6B20\u843D\u3092\u539F\u56F3\u3068\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
   let out = [], count = 0, unsupported = {};
   const layers = d2.tables?.layer?.layers || {};
   for (const [name, l3] of Object.entries(layers)) if (l3.visible === false || l3.frozen) state.hidden.add(name);
@@ -48547,6 +48591,19 @@ function parseDxf(bytes) {
         }
         add(polyPoints(e2.vertices, e2.shape), !!e2.shape);
         break;
+      case "SPLINE": {
+        if (e2.rational) {
+          unsupported["\u6709\u7406SPLINE"] = (unsupported["\u6709\u7406SPLINE"] || 0) + 1;
+          break;
+        }
+        try {
+          add(splinePoints(e2));
+          warn("SPLINE\u66F2\u7DDA\u306F\u5206\u5272\u7DDA\u3067\u8FD1\u4F3C\u3057\u3066\u3044\u307E\u3059\u3002\u5F62\u72B6\u3092\u539F\u56F3\u3068\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+        } catch {
+          unsupported["SPLINE\uFF08\u5236\u5FA1\u70B9\u4E0D\u8DB3\uFF09"] = (unsupported["SPLINE\uFF08\u5236\u5FA1\u70B9\u4E0D\u8DB3\uFF09"] || 0) + 1;
+        }
+        break;
+      }
       case "CIRCLE":
         add(curve(e2.center.x, e2.center.y, e2.radius, e2.radius, 0, 2 * Math.PI), true);
         break;
@@ -48679,6 +48736,7 @@ function clearPDF() {
 }
 async function render() {
   if (!model) return;
+  if (["PDF", "PNG", "JPG", "JPEG"].includes(state.kind)) return renderMedia();
   if (busy) {
     pending = true;
     return;
@@ -48692,7 +48750,7 @@ async function render() {
     if (!entities.length) throw Error("\u30EC\u30A4\u30E4\u30FC\u304C\u3059\u3079\u3066\u975E\u8868\u793A\u3067\u3059\u3002\u8868\u793A\u3059\u308B\u30EC\u30A4\u30E4\u30FC\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
     const b2 = bounds(entities), [long, short] = sizes[$2("paper").value], land = $2("orientation").value === "landscape", pw = land ? long : short, ph = land ? short : long, scale = Number($2("scale").value);
     if (!Number.isFinite(scale) || scale <= 0 || scale > 1e5) throw Error("\u7E2E\u5C3A\u306F0\u3088\u308A\u5927\u304D\u3044\u6570\u5024\u3067\u6307\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
-    const unit = state.kind === "JWW" ? 1 : Number($2("units").value), factor = $2("mode").value === "fit" ? Math.min((pw - 16) / Math.max(b2.w, 1e-3), (ph - 16) / Math.max(b2.h, 1e-3)) : state.kind === "JWW" ? state.storedScale / scale : unit / scale;
+    const unit = ["JWW", "JWC"].includes(state.kind) ? 1 : Number($2("units").value), factor = $2("mode").value === "fit" ? Math.min((pw - 16) / Math.max(b2.w, 1e-3), (ph - 16) / Math.max(b2.h, 1e-3)) : ["JWW", "JWC"].includes(state.kind) ? state.storedScale / scale : unit / scale;
     if (!Number.isFinite(factor) || factor <= 0) throw Error("\u914D\u7F6E\u500D\u7387\u3092\u8A08\u7B97\u3067\u304D\u307E\u305B\u3093\u3002");
     const cx = (b2.minx + b2.maxx) / 2, cy = (b2.miny + b2.maxy) / 2, T3 = (p3) => pt2(pw / 2 + (p3.x - cx) * factor, ph / 2 - (p3.y - cy) * factor);
     paths = [];
@@ -48781,10 +48839,14 @@ async function load2(file) {
     return;
   }
   const ext = file.name.split(".").pop().toUpperCase();
-  if (!["JWW", "DXF"].includes(ext)) {
-    status("JWW\u307E\u305F\u306FDXF\u30D5\u30A1\u30A4\u30EB\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044\u3002", true);
+  if (!["JWW", "JWC", "DXF", "PDF", "PNG", "JPG", "JPEG"].includes(ext)) {
+    status("\u5BFE\u5FDC\u5F62\u5F0F\uFF1AJWW\u30FBJWC\u30FBDXF\u30FBPDF\u30FBPNG\u30FBJPEG\u3067\u3059\u3002", true);
     return;
   }
+  busy = true;
+  await releaseMedia();
+  $2("pageNav").hidden = true;
+  setMediaControls(false);
   clearPDF();
   copyItems = [];
   $2("selectedText").value = "";
@@ -48802,7 +48864,13 @@ async function load2(file) {
   await new Promise((r2) => setTimeout(r2, 20));
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    model = ext === "JWW" ? parseJww(bytes) : parseDxf(bytes);
+    if (["PDF", "PNG", "JPG", "JPEG"].includes(ext)) {
+      await loadMedia(bytes, file);
+      busy = false;
+      await renderMedia();
+      return;
+    }
+    model = ["JWW", "JWC"].includes(ext) ? parseJww(bytes) : parseDxf(bytes);
     if (model.entities.length > 2e5) throw Error("\u8868\u793A\u8981\u7D20\u304C20\u4E07\u4EF6\u3092\u8D85\u3048\u307E\u3059\u3002\u56F3\u9762\u3092\u5206\u5272\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
     $2("unitsLabel").hidden = ext !== "DXF";
     layerUI();
@@ -48811,6 +48879,7 @@ async function load2(file) {
     await render();
   } catch (e2) {
     model = null;
+    await releaseMedia();
     $2("sheet").style.display = "none";
     $2("empty").style.display = "flex";
     status("\u8AAD\u307F\u8FBC\u3081\u307E\u305B\u3093\u3067\u3057\u305F\uFF1A" + (e2.message || e2), true);
@@ -48818,6 +48887,7 @@ async function load2(file) {
   }
 }
 function createPDF() {
+  if (["PDF", "PNG", "JPG", "JPEG"].includes(state.kind)) return createMediaPDF();
   if (!model?.output || !paths.length) throw Error("\u5148\u306B\u56F3\u9762\u3092\u8AAD\u307F\u8FBC\u3093\u3067\u304F\u3060\u3055\u3044\u3002");
   if (pdfBlob) return pdfBlob;
   const { pw, ph } = model.output;
@@ -48879,7 +48949,224 @@ async function output(open2) {
     status(e2.message, true);
   }
 }
-$2("file").onchange = (e2) => load2(e2.target.files[0]);
+var media = null;
+var pdfLib = null;
+var cmapBundlePromise = null;
+async function ensurePdf() {
+  if (!pdfLib) {
+    pdfLib = await import("./vendor/pdfjs/pdf.min.mjs");
+    pdfLib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdfjs/pdf.worker.min.mjs", location.href).href;
+  }
+  return pdfLib;
+}
+var LocalPdfBinaryFactory = class {
+  constructor(options) {
+    Object.assign(this, options);
+  }
+  async fetch({ kind, filename }) {
+    if (kind === "cMapUrl") {
+      cmapBundlePromise ??= fetch("./vendor/pdfjs/cmaps.json").then((r2) => {
+        if (!r2.ok) throw Error("CMap\u304C\u3042\u308A\u307E\u305B\u3093");
+        return r2.json();
+      });
+      const bundle = await cmapBundlePromise, key = filename.replace(/\.bcmap$/, "");
+      if (!bundle[key]) throw Error("\u672A\u5BFE\u5FDCCMap\uFF1A" + key);
+      const binary = atob(bundle[key]);
+      return Uint8Array.from(binary, (c4) => c4.charCodeAt(0));
+    }
+    if (!["standardFontDataUrl", "wasmUrl"].includes(kind) || !filename || filename.includes("..") || filename.includes("/")) throw Error("\u672A\u5BFE\u5FDC\u306EPDF\u88DC\u52A9\u30C7\u30FC\u30BF\u3067\u3059");
+    const response = await fetch(new URL(filename, this[kind]));
+    if (!response.ok) throw Error("PDF\u88DC\u52A9\u30C7\u30FC\u30BF\u3092\u8AAD\u307F\u8FBC\u3081\u307E\u305B\u3093");
+    return new Uint8Array(await response.arrayBuffer());
+  }
+};
+function setMediaControls(kind) {
+  const isPDF = kind === "PDF", isImage = ["PNG", "JPG", "JPEG"].includes(kind);
+  for (const id of ["paper", "orientation"]) $2(id).disabled = isPDF;
+  for (const id of ["scale", "mode", "color", "units"]) $2(id).disabled = isPDF || isImage;
+  $2("layerBox").hidden = isPDF || isImage;
+  $2("unitsLabel").hidden = true;
+}
+async function releaseMedia() {
+  if (!media) return;
+  const previous = media;
+  media = null;
+  if (previous.task) await previous.task.destroy().catch(() => {
+  });
+  else if (typeof previous.pdf?.destroy === "function") await previous.pdf.destroy().catch(() => {
+  });
+  if (previous.url) URL.revokeObjectURL(previous.url);
+  for (const [id, value] of Object.entries(previous.settings || {})) $2(id).value = value;
+}
+async function loadMedia(bytes, file) {
+  const settings = Object.fromEntries(["paper", "orientation", "mode", "color", "scale", "units"].map((id) => [id, $2(id).value]));
+  media = { kind: state.kind, settings };
+  setMediaControls(state.kind);
+  if (state.kind === "PDF") {
+    const lib = await ensurePdf();
+    media.blob = new Blob([bytes], { type: "application/pdf" });
+    const base = new URL("./vendor/pdfjs/", location.href);
+    const task = lib.getDocument({ data: bytes.slice(), BinaryDataFactory: LocalPdfBinaryFactory, useWorkerFetch: false, cMapUrl: base.href + "cmaps/", cMapPacked: true, standardFontDataUrl: base.href + "standard_fonts/", wasmUrl: base.href + "wasm/", iccUrl: base.href + "iccs/", isEvalSupported: false, stopAtErrors: true, enableXfa: false, canvasMaxAreaInBytes: 24e6, maxImageSize: 4e7 });
+    media.task = task;
+    let protectedPDF = false;
+    task.onPassword = () => {
+      protectedPDF = true;
+      task.destroy();
+    };
+    try {
+      media.pdf = await task.promise;
+    } catch (e2) {
+      throw Error(protectedPDF ? "\u30D1\u30B9\u30EF\u30FC\u30C9\u4ED8\u304DPDF\u306F\u958B\u3051\u307E\u305B\u3093\u3002\u30D1\u30B9\u30EF\u30FC\u30C9\u3092\u89E3\u9664\u3057\u305FPDF\u3092\u9078\u3093\u3067\u304F\u3060\u3055\u3044\u3002" : e2.message || "PDF\u3092\u958B\u3051\u307E\u305B\u3093");
+    }
+    media.page = 1;
+    const permissions = await media.pdf.getPermissions();
+    media.canCopy = permissions === null || permissions.includes(lib.PermissionFlag.COPY);
+    $2("pageNav").hidden = false;
+    model = { entities: [], sourceCount: media.pdf.numPages };
+  } else {
+    const blob = new Blob([bytes], { type: state.kind === "PNG" ? "image/png" : "image/jpeg" });
+    media.url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.src = media.url;
+    try {
+      await image.decode();
+    } catch {
+      throw Error("\u753B\u50CF\u3092\u8AAD\u307F\u8FBC\u3081\u307E\u305B\u3093\u3002PNG\u307E\u305F\u306FJPEG\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    }
+    if (image.naturalWidth * image.naturalHeight > 4e7) throw Error("\u753B\u50CF\u304C\u5927\u304D\u3059\u304E\u307E\u3059\u30024,000\u4E07\u753B\u7D20\u4EE5\u4E0B\u306B\u7E2E\u5C0F\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    media.image = image;
+    $2("mode").value = "fit";
+    model = { entities: [], sourceCount: 1 };
+  }
+}
+function mediaWarningList(warnings) {
+  $2("warnings").innerHTML = warnings.map((s3) => `<li>${esc(s3)}</li>`).join("");
+  $2("warningCount").textContent = warnings.length + "\u9805\u76EE";
+}
+async function renderMedia() {
+  if (!media || busy) return;
+  busy = true;
+  clearPDF();
+  status("\u56F3\u9762\u3092\u8868\u793A\u3057\u3066\u3044\u307E\u3059\u2026");
+  $2("prevPage").disabled = true;
+  $2("nextPage").disabled = true;
+  try {
+    copyItems = [];
+    $2("selectedText").value = "";
+    $2("copyText").disabled = true;
+    $2("copyStatus").textContent = "";
+    const container = document.createElement("div");
+    container.className = "media-page";
+    let warnings = [];
+    if (media.kind === "PDF") {
+      const page = await media.pdf.getPage(media.page);
+      const natural = page.getViewport({ scale: 1 }), scale = Math.min(1.6, Math.sqrt(6e6 / (natural.width * natural.height))), viewport = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const ctx = canvas.getContext("2d", { alpha: false });
+      container.append(canvas);
+      await page.render({ canvasContext: ctx, viewport, annotationMode: pdfLib.AnnotationMode.ENABLE, background: "rgb(255,255,255)" }).promise;
+      const content = await page.getTextContent();
+      if (media.canCopy) {
+        for (const item of content.items) {
+          if (!item.str?.trim()) continue;
+          const index2 = copyItems.length;
+          copyItems.push({ text: item.str, layer: "PDF " + media.page + "\u30DA\u30FC\u30B8" });
+          const matrix = pdfLib.Util.transform(viewport.transform, item.transform), h3 = Math.hypot(matrix[2], matrix[3]), w2 = Math.max(1, item.width * scale), button = document.createElement("button");
+          button.className = "media-text-hit";
+          button.dataset.copyIndex = String(index2);
+          button.title = item.str;
+          button.setAttribute("aria-label", item.str + "\u3092\u9078\u629E");
+          button.style.left = matrix[4] / viewport.width * 100 + "%";
+          button.style.top = (matrix[5] - h3) / viewport.height * 100 + "%";
+          button.style.width = w2 / viewport.width * 100 + "%";
+          button.style.height = Math.max(h3, 5) / viewport.height * 100 + "%";
+          container.append(button);
+        }
+      }
+      model.output = { pw: natural.width / MM, ph: natural.height / MM };
+      $2("pageLabel").textContent = `${media.page} / ${media.pdf.numPages} \u30DA\u30FC\u30B8`;
+      $2("dimensions").textContent = `PDF\u539F\u5BF8 ${model.output.pw.toFixed(1)} \xD7 ${model.output.ph.toFixed(1)} mm`;
+      $2("drawingMeta").textContent = `PDF \xB7 ${media.pdf.numPages}\u30DA\u30FC\u30B8 \xB7 \u3053\u306E\u30DA\u30FC\u30B8\u306E\u6587\u5B57 ${copyItems.length}\u4EF6`;
+      warnings.push("PDF\u306E\u4FDD\u5B58\u306F\u5143\u306EPDF\u3092\u305D\u306E\u307E\u307E\u4FDD\u5B58\u3057\u307E\u3059\u3002\u7528\u7D19\u30B5\u30A4\u30BA\u30FB\u7E2E\u5C3A\u306F\u5909\u66F4\u3057\u307E\u305B\u3093\u3002");
+      if (!media.canCopy) warnings.push("\u3053\u306EPDF\u306F\u6587\u5B57\u30B3\u30D4\u30FC\u304C\u5236\u9650\u3055\u308C\u3066\u3044\u307E\u3059\u3002\u30B3\u30D4\u30FC\u6A5F\u80FD\u3092\u7121\u52B9\u306B\u3057\u307E\u3057\u305F\u3002");
+      else if (!copyItems.length) warnings.push("\u3053\u306E\u30DA\u30FC\u30B8\u304B\u3089\u6587\u5B57\u60C5\u5831\u3092\u53D6\u5F97\u3067\u304D\u307E\u305B\u3093\u3002\u753B\u50CF\u3060\u3051\u306EPDF\u3084\u7DDA\u3067\u63CF\u304B\u308C\u305F\u6587\u5B57\u306F\u30B3\u30D4\u30FC\u3067\u304D\u307E\u305B\u3093\u3002");
+      else warnings.push("\u30B3\u30D4\u30FC\u5BFE\u8C61\u306F\u8868\u793A\u4E2D\u306E\u30DA\u30FC\u30B8\u3067\u3059\u3002PDF\u306B\u3088\u308A\u6587\u5B57\u306E\u4E26\u3073\u30FB\u9078\u629E\u4F4D\u7F6E\u30FB\u7A7A\u767D\u304C\u7570\u306A\u308A\u307E\u3059\u3002");
+      page.cleanup();
+    } else {
+      const image = media.image, [long, short] = sizes[$2("paper").value], land = $2("orientation").value === "landscape", pw = land ? long : short, ph = land ? short : long, factor = Math.min((pw - 16) / image.naturalWidth, (ph - 16) / image.naturalHeight), width = image.naturalWidth * factor, height = image.naturalHeight * factor;
+      const box = document.createElement("div");
+      box.style.aspectRatio = pw + "/" + ph;
+      box.style.position = "relative";
+      const img = document.createElement("img");
+      img.src = media.url;
+      img.alt = state.name;
+      Object.assign(img.style, { position: "absolute", left: (pw - width) / 2 / pw * 100 + "%", top: (ph - height) / 2 / ph * 100 + "%", width: width / pw * 100 + "%", height: "auto" });
+      box.append(img);
+      container.append(box);
+      model.output = { pw, ph, x: (pw - width) / 2, y: (ph - height) / 2, width, height };
+      $2("drawingMeta").textContent = `${media.kind} \xB7 ${image.naturalWidth} \xD7 ${image.naturalHeight} px`;
+      $2("dimensions").textContent = `${$2("paper").value} ${pw} \xD7 ${ph} mm \uFF0F \u753B\u50CF\u3092\u7528\u7D19\u306B\u5408\u308F\u305B\u308B`;
+      warnings.push("\u753B\u50CF\u306F\u7528\u7D19\u306B\u5408\u308F\u305B\u3066\u914D\u7F6E\u3057\u307E\u3059\u3002\u5B9F\u5BF8\u30FB\u56F3\u9762\u306B\u8A18\u8F09\u3055\u308C\u305F\u7E2E\u5C3A\u306F\u4FDD\u8A3C\u3057\u307E\u305B\u3093\u3002");
+      warnings.push("\u753B\u50CF\u5185\u306E\u6587\u5B57\u306F\u30B3\u30D4\u30FC\u3067\u304D\u307E\u305B\u3093\u3002OCR\u306F\u642D\u8F09\u3057\u3066\u3044\u307E\u305B\u3093\u3002");
+    }
+    $2("empty").style.display = "none";
+    $2("sheet").style.display = "block";
+    $2("sheet").innerHTML = "";
+    $2("sheet").append(container);
+    $2("sheet").classList.toggle("copy-active", copyMode);
+    $2("drawingTitle").textContent = state.name;
+    updateTextList();
+    mediaWarningList(warnings);
+    setZoom(zoom);
+    $2("save").disabled = false;
+    $2("open").disabled = false;
+    status("\u8868\u793A\u5B8C\u4E86\u3002PDF\u3092\u4FDD\u5B58\u3067\u304D\u307E\u3059\u3002");
+  } catch (e2) {
+    status("\u8868\u793A\u3067\u304D\u307E\u305B\u3093\uFF1A" + (e2.message || e2), true);
+    $2("sheet").style.display = "none";
+  } finally {
+    busy = false;
+    if (media?.kind === "PDF") {
+      $2("prevPage").disabled = media.page <= 1;
+      $2("nextPage").disabled = media.page >= media.pdf.numPages;
+    }
+  }
+}
+function createMediaPDF() {
+  if (!model?.output || !media) throw Error("\u5148\u306B\u56F3\u9762\u3092\u8AAD\u307F\u8FBC\u3093\u3067\u304F\u3060\u3055\u3044\u3002");
+  if (media.kind === "PDF") return media.blob;
+  if (pdfBlob) return pdfBlob;
+  const { pw, ph, x: x2, y: y3, width, height } = model.output, image = media.image, k2 = Math.min(1, Math.sqrt(12e6 / (image.naturalWidth * image.naturalHeight))), canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * k2));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * k2));
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const doc = new E({ orientation: pw > ph ? "landscape" : "portrait", unit: "mm", format: [pw, ph], compress: true, precision: 8 });
+  doc.setProperties({ title: state.name, creator: "CAD PDF" });
+  doc.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", x2, y3, width, height);
+  pdfBlob = doc.output("blob");
+  canvas.width = 1;
+  canvas.height = 1;
+  return pdfBlob;
+}
+$2("prevPage").onclick = async () => {
+  if (busy || !media?.pdf || media.page <= 1) return;
+  media.page--;
+  await renderMedia();
+};
+$2("nextPage").onclick = async () => {
+  if (busy || !media?.pdf || media.page >= media.pdf.numPages) return;
+  media.page++;
+  await renderMedia();
+};
+$2("file").onchange = (e2) => {
+  load2(e2.target.files[0]);
+  e2.target.value = "";
+};
 $2("save").onclick = () => output(false);
 $2("open").onclick = () => output(true);
 for (const id of ["paper", "orientation", "scale", "units", "mode", "color"]) $2(id).onchange = render;
@@ -49000,14 +49287,16 @@ Promise.all([fetch("./vendor/NotoSansJP.ttf").then((r2) => {
 })]).then(() => {
   $2("file").disabled = false;
   $2("demo").disabled = false;
-  status("\u6E96\u5099\u5B8C\u4E86\u3002JWW\u30FBDXF\u30D5\u30A1\u30A4\u30EB\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+  status("\u6E96\u5099\u5B8C\u4E86\u3002CAD\u30FBPDF\u30FB\u753B\u50CF\u30D5\u30A1\u30A4\u30EB\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
 }).catch((e2) => status("\u8D77\u52D5\u3067\u304D\u307E\u305B\u3093\uFF1A" + e2.message + "\u3002\u30DA\u30FC\u30B8\u3092\u518D\u8AAD\u307F\u8FBC\u307F\u3057\u3066\u304F\u3060\u3055\u3044\u3002", true));
 export {
   createPDF,
   load2 as load,
   parseDxf,
   parseJww,
-  render
+  rawDxfTypes,
+  render,
+  splinePoints
 };
 /*! Bundled license information:
 
