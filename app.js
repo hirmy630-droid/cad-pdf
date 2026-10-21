@@ -48734,6 +48734,29 @@ function clearPDF() {
   $2("save").disabled = true;
   $2("open").disabled = true;
 }
+function clearTextSelection() {
+  copyItems = [];
+  $2("selectedText").value = "";
+  $2("copyText").disabled = true;
+  $2("copyStatus").textContent = "";
+  updateTextList();
+}
+function resetDrawingView() {
+  clearTextSelection();
+  paths = [];
+  $2("pageNav").hidden = true;
+  $2("pageLabel").textContent = "";
+  $2("sheet").innerHTML = "";
+  $2("sheet").style.display = "none";
+  $2("empty").style.display = "flex";
+  $2("layers").innerHTML = "";
+  $2("layerCount").textContent = "0";
+  $2("drawingTitle").textContent = "\u56F3\u9762\u30D7\u30EC\u30D3\u30E5\u30FC";
+  $2("drawingMeta").textContent = "\u30D5\u30A1\u30A4\u30EB\u3092\u9078\u3076\u3068\u3001\u3053\u3053\u306B\u8868\u793A\u3055\u308C\u307E\u3059";
+  $2("dimensions").textContent = "\u2014";
+  $2("warnings").innerHTML = "";
+  $2("warningCount").textContent = "";
+}
 async function render() {
   if (!model) return;
   if (["PDF", "PNG", "JPG", "JPEG"].includes(state.kind)) return renderMedia();
@@ -48743,6 +48766,7 @@ async function render() {
   }
   busy = true;
   clearPDF();
+  clearTextSelection();
   status("\u56F3\u9762\u3092\u914D\u7F6E\u3057\u3066\u3044\u307E\u3059\u2026");
   await new Promise((r2) => setTimeout(r2, 20));
   try {
@@ -48800,7 +48824,11 @@ async function render() {
     status(`\u5909\u63DB\u6E96\u5099\u5B8C\u4E86\u3002${state.warnings.length ? "\u672A\u5BFE\u5FDC\u30FB\u7C21\u6613\u51E6\u7406\u306E\u8B66\u544A\u304C\u3042\u308A\u307E\u3059\u3002\u78BA\u8A8D\u4E8B\u9805\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002" : "PDF\u3092\u4FDD\u5B58\u3067\u304D\u307E\u3059\u3002"}`);
     setZoom(zoom);
   } catch (e2) {
+    clearTextSelection();
+    paths = [];
+    model.output = null;
     $2("sheet").style.display = "none";
+    $2("dimensions").textContent = "\u2014";
     status(e2.message || String(e2), true);
   } finally {
     busy = false;
@@ -48844,25 +48872,20 @@ async function load2(file) {
     return;
   }
   busy = true;
-  await releaseMedia();
-  $2("pageNav").hidden = true;
-  setMediaControls(false);
-  clearPDF();
-  copyItems = [];
-  $2("selectedText").value = "";
-  $2("copyText").disabled = true;
-  $2("copyStatus").textContent = "";
-  updateTextList();
-  model = null;
-  state.name = file.name;
-  state.kind = ext;
-  state.hidden = /* @__PURE__ */ new Set();
-  state.warnings = [];
-  busy = true;
-  status("CAD\u30C7\u30FC\u30BF\u3092\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059\u2026");
-  $2("fileInfo").textContent = file.name + " \xB7 " + (file.size / 1024).toFixed(0) + " KB";
-  await new Promise((r2) => setTimeout(r2, 20));
   try {
+    await releaseMedia();
+    setMediaControls(false);
+    clearPDF();
+    resetDrawingView();
+    model = null;
+    state.name = file.name;
+    state.kind = ext;
+    state.hidden = /* @__PURE__ */ new Set();
+    state.warnings = [];
+    busy = true;
+    status("CAD\u30C7\u30FC\u30BF\u3092\u8AAD\u307F\u8FBC\u3093\u3067\u3044\u307E\u3059\u2026");
+    $2("fileInfo").textContent = file.name + " \xB7 " + (file.size / 1024).toFixed(0) + " KB";
+    await new Promise((r2) => setTimeout(r2, 20));
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (["PDF", "PNG", "JPG", "JPEG"].includes(ext)) {
       await loadMedia(bytes, file);
@@ -48880,9 +48903,11 @@ async function load2(file) {
   } catch (e2) {
     model = null;
     await releaseMedia();
-    $2("sheet").style.display = "none";
-    $2("empty").style.display = "flex";
+    setMediaControls(false);
+    clearPDF();
+    resetDrawingView();
     status("\u8AAD\u307F\u8FBC\u3081\u307E\u305B\u3093\u3067\u3057\u305F\uFF1A" + (e2.message || e2), true);
+  } finally {
     busy = false;
   }
 }
@@ -48921,10 +48946,12 @@ function createPDF() {
 }
 async function output(open2) {
   if (busy) return;
-  const win = open2 ? window.open("about:blank", "_blank") : null;
-  status("PDF\u3092\u4F5C\u6210\u3057\u3066\u3044\u307E\u3059\u2026");
-  await new Promise((r2) => setTimeout(r2, 30));
+  busy = true;
+  let win = null;
   try {
+    win = open2 ? window.open("about:blank", "_blank") : null;
+    status("PDF\u3092\u4F5C\u6210\u3057\u3066\u3044\u307E\u3059\u2026");
+    await new Promise((r2) => setTimeout(r2, 30));
     const blob = createPDF();
     if (!pdfURL) pdfURL = URL.createObjectURL(blob);
     if (open2) {
@@ -48947,6 +48974,12 @@ async function output(open2) {
   } catch (e2) {
     win?.close();
     status(e2.message, true);
+  } finally {
+    busy = false;
+    if (pending) {
+      pending = false;
+      render();
+    }
   }
 }
 var media = null;
@@ -49174,6 +49207,7 @@ $2("zoomIn").onclick = () => setZoom(zoom + 0.25);
 $2("zoomOut").onclick = () => setZoom(zoom - 0.25);
 $2("fit").onclick = () => setZoom(1);
 $2("all").onclick = () => {
+  if (!model) return;
   state.hidden.clear();
   layerUI();
   render();

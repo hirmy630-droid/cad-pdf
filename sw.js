@@ -1,5 +1,5 @@
 /* CAD PDF scoped, revision-consistent offline assets. Updates activate after all app windows close. */
-const BUILD = "10cf0c5dd109";
+const BUILD = "0571bb353405";
 const BASE = new URL(self.registration.scope);
 const PREFIX = 'cad-pdf-' + encodeURIComponent(BASE.pathname) + '-';
 const CACHE = PREFIX + BUILD;
