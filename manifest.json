@@ -1,0 +1,11 @@
+{
+  "id": "./index.html",
+  "name": "CAD PDF",
+  "short_name": "CAD PDF",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#edf1f5",
+  "theme_color": "#101b2a",
+  "lang": "ja"
+}
